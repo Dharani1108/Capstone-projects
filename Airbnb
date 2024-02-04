@@ -1,1 +1,437 @@
 
+import pandas as pd
+import pymongo
+import mysql.connector
+import plotly.express as px
+import streamlit as st
+from streamlit_option_menu import option_menu
+import os
+from PIL import Image
+import warnings
+
+
+# Pymongo database
+#data_collection:
+
+client =pymongo.MongoClient("mongodb+srv://dharani8890:sai1108@cluster0.o7fjb6h.mongodb.net/?retryWrites=true&w=majority")
+db=client["sample_airbnb"]
+col = db['listingsAndReviews']
+
+class data_preprocessing:
+    def primary():
+        # direct feature columns
+        data = []
+        for i in col.find( {}, {'_id':1,'listing_url':1,'name':1,'property_type':1,'room_type':1,'bed_type':1,
+                                'minimum_nights':1,'maximum_nights':1,'cancellation_policy':1,'accommodates':1,
+                                'bedrooms':1,'beds':1,'number_of_reviews':1,'bathrooms':1,'price':1,
+                                'cleaning_fee':1,'extra_people':1,'guests_included':1,'images.picture_url':1,
+                                'review_scores.review_scores_rating':1} ):
+            data.append(i)
+
+        df_1 = pd.DataFrame(data)
+        df_1['images'] = df_1['images'].apply(lambda x: x['picture_url'])
+        df_1['review_scores'] = df_1['review_scores'].apply(lambda x: x.get('review_scores_rating',0))
+        
+    # null value handling
+        df_1['bedrooms'].fillna(0, inplace=True)
+        df_1['beds'].fillna(0, inplace=True)
+        df_1['bathrooms'].fillna(0, inplace=True)
+        df_1['cleaning_fee'].fillna('Not Specified', inplace=True)
+
+        # data types conversion
+        df_1['minimum_nights'] = df_1['minimum_nights'].astype(int)
+        df_1['maximum_nights'] = df_1['maximum_nights'].astype(int)
+        df_1['bedrooms'] = df_1['bedrooms'].astype(int)
+        df_1['beds'] = df_1['beds'].astype(int)
+        df_1['bathrooms'] = df_1['bathrooms'].astype(str).astype(float)
+        df_1['price'] = df_1['price'].astype(str).astype(float).astype(int)
+        df_1['cleaning_fee'] = df_1['cleaning_fee'].apply(lambda x: int(
+            float(str(x))) if x != 'Not Specified' else 'Not Specified')
+        df_1['extra_people'] = df_1['extra_people'].astype(
+            str).astype(float).astype(int)
+        df_1['guests_included'] = df_1['guests_included'].astype(
+            str).astype(int)
+
+        return df_1
+
+    def host():
+            host = []
+            for i in col.find({}, {'_id': 1, 'host': 1}):
+                host.append(i)
+
+            df_host = pd.DataFrame(host)
+            host_keys = list(df_host.iloc[0, 1].keys())
+            host_keys.remove('host_about')
+
+            # make nested dictionary to separate columns
+            for i in host_keys:
+                if i == 'host_response_time':
+                    df_host['host_response_time'] = df_host['host'].apply(
+                        lambda x: x['host_response_time'] if 'host_response_time' in x else 'Not Specified')
+                else:
+                    df_host[i] = df_host['host'].apply(
+                        lambda x: x[i] if i in x and x[i] != '' else 'Not Specified')
+
+            df_host.drop(columns=['host'], inplace=True)
+
+            # data type conversion
+            df_host['host_is_superhost'] = df_host['host_is_superhost'].map(
+                {False: 'No', True: 'Yes'})
+            df_host['host_has_profile_pic'] = df_host['host_has_profile_pic'].map(
+                {False: 'No', True: 'Yes'})
+            df_host['host_identity_verified'] = df_host['host_identity_verified'].map(
+                {False: 'No', True: 'Yes'})
+
+            return df_host
+
+    def address():
+        Address = []
+        for i in col.find({}, {'_id': 1, 'address': 1}):
+            Address.append(i)
+
+        df_address = pd.DataFrame(Address)
+        address_keys = list(df_address.iloc[0, 1].keys())
+
+        # nested dicionary to separate columns
+        for i in address_keys:
+            if i == 'location':
+                df_address['location_type'] = df_address['Address'].apply(
+                    lambda x: x['location']['type'])
+                df_address['longitude'] = df_address['Address'].apply(
+                    lambda x: x['location']['coordinates'][0])
+                df_address['latitude'] = df_address['Address'].apply(
+                    lambda x: x['location']['coordinates'][1])
+                df_address['is_location_exact'] = df_address['Address'].apply(
+                    lambda x: x['location']['is_location_exact'])
+            else:
+                df_address[i] = df_address['Address'].apply(
+                    lambda x: x[i] if x[i] != '' else 'Not Specified')
+
+        df_address.drop(columns=['Address'], inplace=True)
+
+        # bool data conversion to string
+        df_address['is_location_exact'] = df_address['is_location_exact'].map(
+            {False: 'No', True: 'Yes'})
+        return df_address
+
+    def availability():
+            availability = []
+            for i in col.find({}, {'_id': 1, 'availability': 1}):
+                availability.append(i)
+
+            df_availability = pd.DataFrame(availability)
+            availability_keys = list(df_availability.iloc[0, 1].keys())
+
+            # nested dicionary to separate columns
+            for i in availability_keys:
+                df_availability['availability_30'] = df_availability['availability'].apply(
+                    lambda x: x['availability_30'])
+                df_availability['availability_60'] = df_availability['availability'].apply(
+                    lambda x: x['availability_60'])
+                df_availability['availability_90'] = df_availability['availability'].apply(
+                    lambda x: x['availability_90'])
+                df_availability['availability_365'] = df_availability['availability'].apply(
+                    lambda x: x['availability_365'])
+
+            df_availability.drop(columns=['availability'], inplace=True)
+            return df_availability
+
+    def amenities_sort(x):
+            a = x
+            a.sort(reverse=False)
+            return a
+
+    def amenities():
+            amenities = []
+            for i in col.find({}, {'_id': 1, 'amenities': 1}):
+                amenities.append(i)
+
+            df_amenities = pd.DataFrame(amenities)
+
+            # sort the list of amenities
+            df_amenities['amenities'] = df_amenities['amenities'].apply(
+                lambda x: data_preprocessing.amenities_sort(x))
+            return df_amenities
+
+    def merge_dataframe():
+        df_1 = data_preprocessing.primary()
+        df_host = data_preprocessing.host()
+        df_address = data_preprocessing.address()
+        df_availability = data_preprocessing.availability()
+        df_amenities = data_preprocessing.amenities()
+
+        df = pd.merge(df_1, df_host, on='_id')
+        df = pd.merge(df, df_address, on='_id')
+        df = pd.merge(df, df_availability, on='_id')
+        df = pd.merge(df, df_amenities, on='_id')
+
+        return df
+
+class sql:
+
+  # SQL database connection
+
+    def Airbnb_Table():
+        mydb = mysql.connector.connect(
+        host="localhost",
+        user="root",
+        password="",)
+
+        mycursor = mydb.cursor(buffered=True)
+        # mycursor.execute("create database Airbnb")
+        mycursor.execute(f"""create table if not exists Airbnb.airbnb_details(
+                            _id					varchar(255) primary key,
+                            listing_url			text,
+                            name				varchar(255),
+                            property_type		varchar(255),
+                            room_type			varchar(255),
+                            bed_type			varchar(255),
+                            minimum_nights		int,
+                            maximum_nights		int,
+                            cancellation_policy	varchar(255),
+                            accommodates		int,
+                            bedrooms			int,
+                            beds				int,
+                            number_of_reviews	int,
+                            bathrooms			float,
+                            price				int,
+                            cleaning_fee		varchar(20),
+                            extra_people		int,
+                            guests_included		int,
+                            images				text,
+                            review_scores		int,
+                            host_id				varchar(255),
+                            host_url			text,
+                            host_name			varchar(255),
+                            host_location		varchar(255),
+                            host_response_time			varchar(255),
+                            host_thumbnail_url			text,
+                            host_picture_url			text,
+                            host_neighbourhood			varchar(255),
+                            host_response_rate			varchar(255),
+                            host_is_superhost			varchar(25),
+                            host_has_profile_pic		varchar(25),
+                            host_identity_verified		varchar(25),
+                            host_listings_count			int,
+                            host_total_listings_count	int,
+                            host_verifications			text,
+                            street				varchar(255),
+                            suburb				varchar(255),
+                            government_area		varchar(255),
+                            market				varchar(255),
+                            country				varchar(255),
+                            country_code		varchar(255),
+                            location_type		varchar(255),
+                            longitude			float,
+                            latitude			float,
+                            is_location_exact	varchar(25),
+                            availability_30		int,
+                            availability_60		int,
+                            availability_90		int,
+                            availability_365	int,
+                            amenities			text);""")
+
+        mydb.commit()
+        mydb.close()
+    def data_migration():
+        mydb = mysql.connector.connect(
+                host="localhost",
+                user="root",
+                password="",)
+        mycursor = mydb.cursor(buffered=True)
+        df = data_preprocessing.merge_dataframe()
+
+        mycursor.executemany("insert into Airbnb.airbnb_details \
+                            values(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,\
+                                %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,\
+                                %s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", df.values.tolist())
+        mydb.commit()
+        mydb.close()
+    def delete_table():
+       mydb = mysql.connector.connect(
+                host="localhost",
+                user="root",
+                password="",)
+       mycursor = mydb.cursor(buffered=True)
+       mycursor.execute(f"""delete from Airbnb.airbnb_details;""")
+       mydb.commit()
+       mydb.close()
+
+#setting up streamlit
+
+st.set_page_config(page_title = "Airbnb data analysis",
+                   layout= "centered",
+                     initial_sidebar_state= "auto",
+                   menu_items={'About': """# This app is developed by *Deepak Harikrishna*! 
+                                The data is gathered by mongodb atlas"""
+                               })
+#Creating the sidebar menu option
+
+with st.sidebar:
+    selected = option_menu("Menu", ["Home","Overview","Explore"], 
+                           icons=["house","graph-up-arrow","bar-chart-line"],
+                           menu_icon= "menu-button-wide",
+                           default_index=0,
+                           styles={"nav-link": {"font-size": "20px", "text-align": "left", "margin": "-2px", "--hover-color": "#FF5A5F"},
+                                   "nav-link-selected": {"background-color": "#FF5A5F"}})
+    
+df = pd.read_csv('airbnb.csv')
+
+#home page
+
+if selected == "Home":
+    columns = st.columns(1,gap='medium')
+    col = columns[0]
+
+    col.markdown("## :blue[Domain] : Travel Industry, Property Management and Tourism")
+    col.markdown("## :blue[Technologies used] : Python, Pandas, Plotly, Streamlit, MongoDB")
+    col.markdown("## :blue[Overview] : To analyze Airbnb data using MongoDB Atlas, perform data cleaning and preparation, develop interactive visualizations, and create dynamic plots to gain insights into pricing variations, availability patterns, and location-based trends. ")
+
+#owverview
+if selected == "Overview":
+    tab1,tab2 = st.tabs(["$\huge 📝 RAW DATA $", "$\huge🚀 INSIGHTS $"])
+    
+    # RAW DATA TAB
+    with tab1:
+        # RAW DATA
+        col1,col2 = st.columns(2)
+        if col1.button("Click to view Raw data"):
+            col1.write(col.find_one())
+        # DATAFRAME FORMAT
+        if col2.button("Click to view Dataframe"):
+            col1.write(col.find_one())
+            col2.write(df)
+# INSIGHTS TAB
+    with tab2:
+        # GETTING USER INPUTS
+        country = st.sidebar.multiselect('Select a Country',sorted(df.country.unique()),sorted(df.country.unique()))
+        prop = st.sidebar.multiselect('Select Property_type',sorted(df.property_type.unique()),sorted(df.property_type.unique()))
+        room = st.sidebar.multiselect('Select Room_type',sorted(df.room_type.unique()),sorted(df.room_type.unique()))
+        price = st.slider('Select Price',df.price.min(),df.price.max(),(df.price.min(),df.price.max()))
+        
+        # CONVERTING THE USER INPUT INTO QUERY
+        query = f'country in {country} & room_type in {room} & property_type in {prop} & price >= {price[0]} & price <= {price[1]}'
+        
+        # CREATING COLUMNS
+        col1,col2 = st.columns(2,gap='medium')
+
+        with col1:
+           df1 = df.query(query).groupby(["property_type"]).size().reset_index(name="Listings").sort_values(by='Listings',ascending=False)[:10]
+           fig = px.bar(df1,
+                         title='Top 10 Property Types',
+                         x='Listings',
+                         y='property_type',
+                         orientation='h',
+                         color='property_type',
+                         color_continuous_scale=px.colors.sequential.Electric)
+        st.plotly_chart(fig,use_container_width=True) 
+        
+            # TOP 10 HOSTS BAR CHART
+        df2 = df.query(query).groupby(["host_name"]).size().reset_index(name="Listings").sort_values(by='Listings',ascending=False)[:10]
+        fig = px.bar(df2,
+                         title='Top 10 Hosts with Highest number of Listings',
+                         x='Listings',
+                         y='host_name',
+                         orientation='h',
+                         color='host_name',
+                         color_continuous_scale=px.colors.sequential.Electric)
+        fig.update_layout(showlegend=False)
+        st.plotly_chart(fig,use_container_width=True)
+        
+        with col2:
+            
+            # TOTAL LISTINGS IN EACH ROOM TYPES PIE CHART
+            df1 = df.query(query).groupby(["room_type"]).size().reset_index(name="counts")
+            fig = px.pie(df1,
+                         title='Total Listings in each Room_types',
+                         names='room_type',
+                         values='counts',
+                         color_discrete_sequence=px.colors.sequential.Rainbow
+                        )
+            fig.update_traces(textposition='outside', textinfo='value+label')
+            st.plotly_chart(fig,use_container_width=True)
+            
+            # TOTAL LISTINGS BY COUNTRY CHOROPLETH MAP
+            country_df = df.query(query).groupby(['country'],as_index=False)['name'].count().rename(columns={'name' : 'Total_Listings'})
+            fig = px.choropleth(country_df,
+                                title='Total Listings in each Country',
+                                locations='country',
+                                locationmode='country names',
+                                color='Total_Listings',
+                                color_continuous_scale=px.colors.sequential.Plasma
+                               )
+            st.plotly_chart(fig,use_container_width=True)
+# EXPLORE PAGE
+if selected == "Explore":
+    st.markdown("## Explore more about the Airbnb data")
+
+  # GETTING USER INPUTS
+    country = st.sidebar.multiselect('Select a Country',sorted(df.country.unique()),sorted(df.country.unique()))
+    prop = st.sidebar.multiselect('Select Property_type',sorted(df.property_type.unique()),sorted(df.property_type.unique()))
+    room = st.sidebar.multiselect('Select Room_type',sorted(df.room_type.unique()),sorted(df.room_type.unique()))
+    price = st.slider('Select Price',df.price.min(),df.price.max(),(df.price.min(),df.price.max()))
+    
+    # CONVERTING THE USER INPUT INTO QUERY
+    query = f'country in {country} & room_type in {room} & property_type in {prop} & price >= {price[0]} & price <= {price[1]}'
+    
+# HEADING 1
+    st.markdown("## Price Analysis")
+
+# CREATING COLUMNS
+    col1,col2 = st.columns(2,gap='medium')
+    
+    with col1:
+        
+        # AVG PRICE BY ROOM TYPE BARCHART
+        pr_df = df.query(query).groupby('room_type',as_index=False)['price'].mean().sort_values(by='price')
+        fig = px.bar(data_frame=pr_df,
+                     x='room_type',
+                     y='price',
+                     color='price',
+                     title='Avg Price in each Room type'
+                    )
+        st.plotly_chart(fig,use_container_width=True)
+
+# HEADING 2
+        st.markdown("## Availability Analysis")
+        
+        # AVAILABILITY BY ROOM TYPE BOX PLOT
+        fig = px.box(data_frame=df.query(query),
+                     x='room_type',
+                     y='availability_365',
+                     color='room_type',
+                     title='Availability by Room_type'
+                    )
+        st.plotly_chart(fig,use_container_width=True)
+    with col2:
+        
+        # AVG PRICE IN COUNTRIES SCATTERGEO
+        country_df = df.query(query).groupby('country',as_index=False)['price'].mean()
+        fig = px.scatter_geo(data_frame=country_df,
+                                       locations='country',
+                                       color= 'price', 
+                                       hover_data=['price'],
+                                       locationmode='country names',
+                                       size='price',
+                                       title= 'Avg Price in each Country',
+                                       color_continuous_scale='agsunset'
+                            )
+        col2.plotly_chart(fig,use_container_width=True)
+ # BLANK SPACE
+        st.markdown("#   ")
+        st.markdown("#   ")
+        
+        # AVG AVAILABILITY IN COUNTRIES SCATTERGEO
+        country_df = df.query(query).groupby('country',as_index=False)['availability_365'].mean()
+        country_df.availability_365 = country_df.availability_365.astype(int)
+        fig = px.scatter_geo(data_frame=country_df,
+                                       locations='country',
+                                       color= 'availability_365', 
+                                       hover_data=['availability_365'],
+                                       locationmode='country names',
+                                       size='availability_365',
+                                       title= 'Avg Availability in each Country',
+                                       color_continuous_scale='agsunset'
+                            )
+        st.plotly_chart(fig,use_container_width=True)
+
